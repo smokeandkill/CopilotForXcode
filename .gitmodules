@@ -1,3 +1,9 @@
 [submodule "HelloGitHub"]
 	path = HelloGitHub
 	url = https://github.com/521xueweihan/HelloGitHub
+[submodule "smokeandkill@github.com"]
+	path = smokeandkill@github.com
+	url = https://smokeandkill@github.com/
+[submodule "Co"]
+	path = Co
+	url = https://smokeandkill@github.com/
