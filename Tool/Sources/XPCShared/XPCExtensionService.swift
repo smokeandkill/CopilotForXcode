@@ -393,6 +393,26 @@ extension XPCExtensionService {
     }
     
     @XPCServiceActor
+    public func getCopilotFeatureFlags() async throws -> FeatureFlags? {
+        return try await withXPCServiceConnected {
+            service, continuation in
+            service.getCopilotFeatureFlags { data in
+                guard let data else {
+                    continuation.resume(nil)
+                    return
+                }
+
+                do {
+                    let tools = try JSONDecoder().decode(FeatureFlags.self, from: data)
+                    continuation.resume(tools)
+                } catch {
+                    continuation.reject(error)
+                }
+            }
+        }
+    }
+    
+    @XPCServiceActor
     public func signOutAllGitHubCopilotService() async throws {
         return try await withXPCServiceConnected {
             service, _ in service.signOutAllGitHubCopilotService()

@@ -1,8 +1,9 @@
-### GitHub Copilot for Xcode 0.39.0
+### GitHub Copilot for Xcode 0.40.0
 
 **🚀 Highlights**
 
 * Performance: Fixed a freezing issue in 'Add Context' view when opening large projects.
+* Support disabling Agent mode when it's disabled by policy.
 
 **🛠️ Bug Fixes**
 

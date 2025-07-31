@@ -308,6 +308,15 @@ public class XPCService: NSObject, XPCServiceProtocol {
         }
     }
     
+    // MARK: - FeatureFlags
+    public func getCopilotFeatureFlags(
+        withReply reply: @escaping (Data?) -> Void
+    ) {
+        let featureFlags = FeatureFlagNotifierImpl.shared.featureFlags
+        let data = try? JSONEncoder().encode(featureFlags)
+        reply(data)
+    }
+    
     // MARK: - Auth
     public func signOutAllGitHubCopilotService() {
         Task { @MainActor in

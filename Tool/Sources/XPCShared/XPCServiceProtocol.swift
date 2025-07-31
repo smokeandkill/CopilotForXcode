@@ -24,6 +24,8 @@ public protocol XPCServiceProtocol {
     func getXcodeInspectorData(withReply reply: @escaping (Data?, Error?) -> Void)
     func getAvailableMCPServerToolsCollections(withReply reply: @escaping (Data?) -> Void)
     func updateMCPServerToolsStatus(tools: Data)
+    
+    func getCopilotFeatureFlags(withReply reply: @escaping (Data?) -> Void)
 
     func signOutAllGitHubCopilotService()
     func getXPCServiceAuthStatus(withReply reply: @escaping (Data?) -> Void)

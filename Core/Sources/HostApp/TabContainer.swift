@@ -5,6 +5,9 @@ import LaunchAgentManager
 import SwiftUI
 import Toast
 import UpdateChecker
+import Client
+import Logger
+import Combine
 
 @MainActor
 public let hostAppStore: StoreOf<HostApp> = .init(initialState: .init(), reducer: { HostApp() })
@@ -13,6 +16,7 @@ public struct TabContainer: View {
     let store: StoreOf<HostApp>
     @ObservedObject var toastController: ToastController
     @State private var tabBarItems = [TabBarItem]()
+    @State private var isAgentModeFFEnabled = true
     @Binding var tag: Int
 
     public init() {
@@ -31,6 +35,19 @@ public struct TabContainer: View {
             get: { store.state.activeTabIndex },
             set: { store.send(.setActiveTab($0)) }
         )
+    }
+    
+    private func updateAgentModeFeatureFlag() async {
+        do {
+            let service = try getService()
+            let featureFlags = try await service.getCopilotFeatureFlags()
+            isAgentModeFFEnabled = featureFlags?.agent_mode ?? true
+            if hostAppStore.activeTabIndex == 2 && !isAgentModeFFEnabled {
+                hostAppStore.send(.setActiveTab(0))
+            }
+        } catch {
+            Logger.client.error("Failed to get copilot feature flags: \(error)")
+        }
     }
 
     public var body: some View {
@@ -51,11 +68,13 @@ public struct TabContainer: View {
                         title: "Advanced",
                         image: "gearshape.2.fill"
                     )
-                    MCPConfigView().tabBarItem(
-                        tag: 2,
-                        title: "MCP",
-                        image: "wrench.and.screwdriver.fill"
-                    )
+                    if isAgentModeFFEnabled {
+                        MCPConfigView().tabBarItem(
+                            tag: 2,
+                            title: "MCP",
+                            image: "wrench.and.screwdriver.fill"
+                        )
+                    }
                 }
                 .environment(\.tabBarTabTag, tag)
                 .frame(minHeight: 400)
@@ -70,7 +89,16 @@ public struct TabContainer: View {
             }
             .onAppear {
                 store.send(.appear)
+                Task {
+                    await updateAgentModeFeatureFlag()
+                }
             }
+            .onReceive(DistributedNotificationCenter.default()
+                .publisher(for: .gitHubCopilotFeatureFlagsDidChange)) { _ in
+                    Task {
+                        await updateAgentModeFeatureFlag()
+                    }
+                }
         }
     }
 }
