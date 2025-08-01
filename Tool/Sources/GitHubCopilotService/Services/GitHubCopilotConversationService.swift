@@ -6,6 +6,10 @@ import Workspace
 import LanguageServerProtocol
 
 public final class GitHubCopilotConversationService: ConversationServiceType {
+    public func notifyChangeTextDocument(fileURL: URL, content: String, version: Int, workspace: WorkspaceInfo) async throws {
+        guard let service = await serviceLocator.getService(from: workspace) else { return }
+        try await service.notifyChangeTextDocument(fileURL: fileURL, content: content, version: version)
+    }
 
     private let serviceLocator: ServiceLocator
     

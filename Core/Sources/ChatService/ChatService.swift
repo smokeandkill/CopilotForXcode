@@ -217,6 +217,10 @@ public final class ChatService: ChatServiceType, ObservableObject {
         }
     }
 
+    public func notifyChangeTextDocument(fileURL: URL, content: String, version: Int) async throws {
+        try await conversationProvider?.notifyChangeTextDocument(fileURL: fileURL, content: content, version: version, workspaceURL: getWorkspaceURL())
+    }
+
     public static func service(for chatTabInfo: ChatTabInfo) -> ChatService {
         let provider = BuiltinExtensionConversationServiceProvider(
             extension: GitHubCopilotExtension.self

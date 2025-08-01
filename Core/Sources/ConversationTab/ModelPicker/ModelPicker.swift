@@ -203,6 +203,9 @@ struct ModelPicker: View {
     // Separate caches for both scopes
     @State private var askScopeCache: ScopeCache = ScopeCache()
     @State private var agentScopeCache: ScopeCache = ScopeCache()
+    
+    @State var isMCPFFEnabled: Bool
+    @State private var cancellables = Set<AnyCancellable>()
 
     let minimumPadding: Int = 48
     let attributes: [NSAttributedString.Key: NSFont] = [.font: NSFont.systemFont(ofSize: NSFont.systemFontSize)]
@@ -218,7 +221,15 @@ struct ModelPicker: View {
     init() {
         let initialModel = AppState.shared.getSelectedModelName() ?? CopilotModelManager.getDefaultChatModel()?.modelName ?? ""
         self._selectedModel = State(initialValue: initialModel)
+        self.isMCPFFEnabled = FeatureFlagNotifierImpl.shared.featureFlags.mcp
         updateAgentPicker()
+    }
+    
+    private func subscribeToFeatureFlagsDidChangeEvent() {
+        FeatureFlagNotifierImpl.shared.featureFlagsDidChange.sink(receiveValue: { featureFlags in
+            isMCPFFEnabled = featureFlags.mcp
+        })
+        .store(in: &cancellables)
     }
 
     var models: [LLMModel] {
@@ -371,20 +382,32 @@ struct ModelPicker: View {
     }
     
     private var mcpButton: some View {
-        Button(action: {
-            try? launchHostAppMCPSettings()
-        }) {
-            Image(systemName: "wrench.and.screwdriver")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 16, height: 16)
-                .padding(4)
-                .foregroundColor(.primary.opacity(0.85))
-                .font(Font.system(size: 11, weight: .semibold))
+        Group {
+            if isMCPFFEnabled {
+                Button(action: {
+                    try? launchHostAppMCPSettings()
+                }) {
+                    mcpIcon.foregroundColor(.primary.opacity(0.85))
+                }
+                .buttonStyle(HoverButtonStyle(padding: 0))
+                .help("Configure your MCP server")
+            } else {
+                // Non-interactive view that looks like a button but only shows tooltip
+                mcpIcon.foregroundColor(Color(nsColor: .tertiaryLabelColor))
+                    .padding(0)
+                    .help("MCP servers are disabled by org policy. Contact your admin.")
+            }
         }
-        .buttonStyle(HoverButtonStyle(padding: 0))
-        .help("Configure your MCP server")
         .cornerRadius(6)
+    }
+    
+    private var mcpIcon: some View {
+        Image(systemName: "wrench.and.screwdriver")
+            .resizable()
+            .scaledToFit()
+            .frame(width: 16, height: 16)
+            .padding(4)
+            .font(Font.system(size: 11, weight: .semibold))
     }
     
     // Main view body
@@ -435,6 +458,9 @@ struct ModelPicker: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .gitHubCopilotSelectedModelDidChange)) { _ in
                 updateCurrentModel()
+            }
+            .task {
+                subscribeToFeatureFlagsDidChangeEvent()
             }
         }
     }

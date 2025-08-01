@@ -24,7 +24,7 @@ public struct ChatModePicker: View {
     public init(chatMode: Binding<String>, onScopeChange: @escaping (PromptTemplateScope) -> Void = { _ in }) {
         self._chatMode = chatMode
         self.onScopeChange = onScopeChange
-        self.isAgentModeFFEnabled = FeatureFlagNotifierImpl.shared.featureFlags.agent_mode != false
+        self.isAgentModeFFEnabled = FeatureFlagNotifierImpl.shared.featureFlags.agentMode
     }
     
     private func setChatMode(mode: ChatMode) {
@@ -38,8 +38,8 @@ public struct ChatModePicker: View {
     }
     
     private func subscribeToFeatureFlagsDidChangeEvent() {
-        FeatureFlagNotifierImpl.shared.featureFlagsDidChange.sink(receiveValue: { (featureFlags) in
-            isAgentModeFFEnabled = featureFlags.agent_mode ?? true
+        FeatureFlagNotifierImpl.shared.featureFlagsDidChange.sink(receiveValue: { featureFlags in
+            isAgentModeFFEnabled = featureFlags.agentMode
         })
         .store(in: &cancellables)
     }

@@ -453,20 +453,28 @@ struct ChatTabContainer: View {
         tabInfoArray: IdentifiedArray<String, ChatTabInfo>,
         selectedTabId: String
     ) -> some View {
-        ZStack {
-            ForEach(tabInfoArray) { tabInfo in
-                if let tab = chatTabPool.getTab(of: tabInfo.id) {
-                    let isActive = tab.id == selectedTabId
-                    tab.body
-                        .opacity(isActive ? 1 : 0)
-                        .disabled(!isActive)
-                        .allowsHitTesting(isActive)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        // Inactive tabs are rotated out of view
-                        .rotationEffect(
-                            isActive ? .zero : .degrees(90),
-                            anchor: .topLeading
-                        )
+        GeometryReader { geometry in
+            ZStack {
+                ForEach(tabInfoArray) { tabInfo in
+                    if let tab = chatTabPool.getTab(of: tabInfo.id) {
+                        let isActive = tab.id == selectedTabId
+                        
+                        if isActive {
+                            // Only render the active tab with full layout
+                            tab.body
+                                .frame(
+                                    width: geometry.size.width,
+                                    height: geometry.size.height
+                                )
+                        } else {
+                            // Render inactive tabs with minimal footprint to avoid layout conflicts
+                            tab.body
+                                .frame(width: 1, height: 1)
+                                .opacity(0)
+                                .allowsHitTesting(false)
+                                .clipped()
+                        }
+                    }
                 }
             }
         }

@@ -8,6 +8,20 @@ import Workspace
 public final class BuiltinExtensionConversationServiceProvider<
     T: BuiltinExtension
 >: ConversationServiceProvider {
+    public func notifyChangeTextDocument(fileURL: URL, content: String, version: Int, workspaceURL: URL?) async throws {
+        guard let conversationService else {
+            Logger.service.error("Builtin chat service not found.")
+            return
+        }
+
+        guard let workspaceInfo = await activeWorkspace(workspaceURL) else {
+            Logger.service.error("Could not get active workspace info")
+            return
+        }
+        
+        try? await conversationService.notifyChangeTextDocument(fileURL: fileURL, content: content, version: version, workspace: workspaceInfo)
+    }
+    
     
     private let extensionManager: BuiltinExtensionManager
 

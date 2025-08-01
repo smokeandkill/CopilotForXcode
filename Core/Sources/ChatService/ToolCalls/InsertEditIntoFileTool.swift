@@ -86,9 +86,9 @@ public class InsertEditIntoFileTool: ICopilotTool {
     }
     
     public static func applyEdit(
-        for fileURL: URL, 
-        content: String, 
-        contextProvider: any ToolContextProvider, 
+        for fileURL: URL,
+        content: String,
+        contextProvider: any ToolContextProvider,
         xcodeInstance: AppInstanceInspector
     ) throws -> String {
         // Get the focused element directly from the app (like XcodeInspector does)
@@ -166,7 +166,7 @@ public class InsertEditIntoFileTool: ICopilotTool {
     }
     
     private static func findSourceEditorElement(
-        from element: AXUIElement, 
+        from element: AXUIElement,
         xcodeInstance: AppInstanceInspector,
         shouldRetry: Bool = true
     ) throws -> AXUIElement {
@@ -215,8 +215,8 @@ public class InsertEditIntoFileTool: ICopilotTool {
     }
     
     public static func applyEdit(
-        for fileURL: URL, 
-        content: String, 
+        for fileURL: URL,
+        content: String,
         contextProvider: any ToolContextProvider,
         completion: ((String?, Error?) -> Void)? = nil
     ) {
@@ -242,7 +242,11 @@ public class InsertEditIntoFileTool: ICopilotTool {
                     xcodeInstance: appInstanceInspector
                 )
                 
-                if let completion = completion { completion(newContent, nil) }
+                Task {
+                    // Force to notify the CLS about the new change within the document before edit_file completion.
+                    try? await contextProvider.notifyChangeTextDocument(fileURL: fileURL, content: newContent, version: 0)
+                    if let completion = completion { completion(newContent, nil) }
+                }
             } catch {
                 if let completion = completion { completion(nil, error) }
                 Logger.client.info("Failed to apply edit for file at \(fileURL), \(error)")

@@ -85,8 +85,8 @@ public protocol GitHubCopilotConversationServiceType {
 }
 
 protocol GitHubCopilotLSP {
+    var eventSequence: ServerConnection.EventSequence { get }
     func sendRequest<E: GitHubCopilotRequestType>(_ endpoint: E) async throws -> E.Response
-    func sendRequest<E: GitHubCopilotRequestType>(_ endpoint: E, timeout: TimeInterval) async throws -> E.Response
     func sendNotification(_ notif: ClientNotification) async throws
 }
 
@@ -135,6 +135,8 @@ public enum GitHubCopilotError: Error, LocalizedError {
                 return "Language server error: Invalid request"
             case .timeout:
                 return "Language server error: Timeout, please try again later"
+            case .unknownError:
+                return "Language server error: An unknown error occurred: \(error)"
             }
         }
     }
@@ -227,13 +229,8 @@ public class GitHubCopilotBaseService {
             Logger.gitHubCopilot.info("Running on Xcode \(xcodeVersion), extension version \(versionNumber)")
 
             let localServer = CopilotLocalProcessServer(executionParameters: executionParams)
-            localServer.notificationHandler = { _, respond in
-                respond(.timeout)
-            }
-            let server = InitializingServer(server: localServer)
-            // TODO: set proper timeout against different request.
-            server.defaultTimeout = 90
-            server.initializeParamsProvider = {
+
+            let initializeParamsProvider = { @Sendable () -> InitializeParams in
                 let capabilities = ClientCapabilities(
                     workspace: .init(
                         applyEdit: false,
@@ -270,6 +267,7 @@ public class GitHubCopilotBaseService {
                         "copilotCapabilities": [
                             /// The editor has support for watching files over LSP
                             "watchedFiles": watchedFiles,
+                            "didChangeFeatureFlags": true
                         ]
                     ],
                     capabilities: capabilities,
@@ -280,6 +278,8 @@ public class GitHubCopilotBaseService {
                     )]
                 )
             }
+            
+            let server = SafeInitializingServer(InitializingServer(server: localServer, initializeParamsProvider: initializeParamsProvider))
 
             return (server, localServer)
         }()
@@ -287,8 +287,6 @@ public class GitHubCopilotBaseService {
         self.server = server
         localProcessServer = localServer
 
-        let notifications = NotificationCenter.default
-            .notifications(named: .gitHubCopilotShouldRefreshEditorInformation)
         Task { [weak self] in
             if projectRootURL.path != "/" {
                 try? await server.sendNotification(
@@ -297,25 +295,35 @@ public class GitHubCopilotBaseService {
                     )
                 )
             }
-
-            let includeMCP = projectRootURL.path != "/"
-            // Send workspace/didChangeConfiguration once after initalize
-            _ = try? await server.sendNotification(
-                .workspaceDidChangeConfiguration(
-                    .init(settings: editorConfiguration(includeMCP: includeMCP))
-                )
-            )
-            for await _ in notifications {
-                guard self != nil else { return }
+            
+            func sendConfigurationUpdate() async {
+                let includeMCP = projectRootURL.path != "/" &&
+                    FeatureFlagNotifierImpl.shared.featureFlags.agentMode &&
+                    FeatureFlagNotifierImpl.shared.featureFlags.mcp
                 _ = try? await server.sendNotification(
                     .workspaceDidChangeConfiguration(
                         .init(settings: editorConfiguration(includeMCP: includeMCP))
                     )
                 )
             }
+
+            // Send initial configuration after initialize
+            await sendConfigurationUpdate()
+            
+            // Combine both notification streams
+            let combinedNotifications = Publishers.Merge(
+                NotificationCenter.default.publisher(for: .gitHubCopilotShouldRefreshEditorInformation).map { _ in "editorInfo" },
+                FeatureFlagNotifierImpl.shared.featureFlagsDidChange.map { _ in "featureFlags" }
+            )
+            
+            for await _ in combinedNotifications.values {
+                guard self != nil else { return }
+                await sendConfigurationUpdate()
+            }
         }
     }
-
+    
+    
 
     public static func createFoldersIfNeeded() throws -> (
         applicationSupportURL: URL,
@@ -421,6 +429,7 @@ public final class GitHubCopilotService:
     private static var services: [GitHubCopilotService] = [] // cache all alive copilot service instances
     private var isMCPInitialized = false
     private var unrestoredMcpServers: [String] = []
+    private var mcpRuntimeLogFileName: String = ""
 
     override init(designatedServer: any GitHubCopilotLSP) {
         super.init(designatedServer: designatedServer)
@@ -439,12 +448,35 @@ public final class GitHubCopilotService:
                         }
                     }
                 }
+                
+                if notification.method == "copilot/mcpRuntimeLogs" && projectRootURL.path != "/" {
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self else { return }
+                        Task { @MainActor in
+                            await self.handleMCPRuntimeLogsNotification(notification)
+                        }
+                    }
+                }
 
                 self?.serverNotificationHandler.handleNotification(notification)
             }).store(in: &cancellables)
-            localProcessServer?.serverRequestPublisher.sink(receiveValue: { [weak self] (request, callback) in
-                self?.serverRequestHandler.handleRequest(request, workspaceURL: workspaceURL, callback: callback, service: self)
-            }).store(in: &cancellables)
+            
+            Task {
+                for await event in server.eventSequence {
+                    switch event {
+                    case let .request(id, request):
+                        switch request {
+                        case let .custom(method, params, callback):
+                            self.serverRequestHandler.handleRequest(.init(id: id, method: method, params: params), workspaceURL: workspaceURL, callback: callback, service: self)
+                        default:
+                            break
+                        }
+                    default:
+                        break
+                    }
+                }
+            }
+
             updateStatusInBackground()
 
             GitHubCopilotService.services.append(self)
@@ -619,7 +651,7 @@ public final class GitHubCopilotService:
                                               userLanguage: userLanguage)
         do {
             _ = try await sendRequest(
-                GitHubCopilotRequest.CreateConversation(params: params), timeout: conversationRequestTimeout(agentMode))
+                GitHubCopilotRequest.CreateConversation(params: params))
         } catch {
             print("Failed to create conversation. Error: \(error)")
             throw error
@@ -659,15 +691,11 @@ public final class GitHubCopilotService:
                                           chatMode: agentMode ? "Agent" : nil,
                                           needToolCallConfirmation: true)
             _ = try await sendRequest(
-                GitHubCopilotRequest.CreateTurn(params: params), timeout: conversationRequestTimeout(agentMode))
+                GitHubCopilotRequest.CreateTurn(params: params))
         } catch {
             print("Failed to create turn. Error: \(error)")
             throw error
         }
-    }
-
-    private func conversationRequestTimeout(_ agentMode: Bool) -> TimeInterval {
-        return agentMode ? 86400 /* 24h for agent mode timeout */ : 600 /* ask mode timeout */
     }
 
     @GitHubCopilotSuggestionActor
@@ -797,7 +825,7 @@ public final class GitHubCopilotService:
         let uri = "file://\(fileURL.path)"
         //        Logger.service.debug("Open \(uri), \(content.count)")
         try await server.sendNotification(
-            .didOpenTextDocument(
+            .textDocumentDidOpen(
                 DidOpenTextDocumentParams(
                     textDocument: .init(
                         uri: uri,
@@ -819,7 +847,7 @@ public final class GitHubCopilotService:
         let uri = "file://\(fileURL.path)"
         //        Logger.service.debug("Change \(uri), \(content.count)")
         try await server.sendNotification(
-            .didChangeTextDocument(
+            .textDocumentDidChange(
                 DidChangeTextDocumentParams(
                     uri: uri,
                     version: version,
@@ -837,14 +865,14 @@ public final class GitHubCopilotService:
     public func notifySaveTextDocument(fileURL: URL) async throws {
         let uri = "file://\(fileURL.path)"
         //        Logger.service.debug("Save \(uri)")
-        try await server.sendNotification(.didSaveTextDocument(.init(uri: uri)))
+        try await server.sendNotification(.textDocumentDidSave(.init(uri: uri)))
     }
 
     @GitHubCopilotSuggestionActor
     public func notifyCloseTextDocument(fileURL: URL) async throws {
         let uri = "file://\(fileURL.path)"
         //        Logger.service.debug("Close \(uri)")
-        try await server.sendNotification(.didCloseTextDocument(.init(uri: uri)))
+        try await server.sendNotification(.textDocumentDidClose(.init(uri: uri)))
     }
     
     @GitHubCopilotSuggestionActor
@@ -995,34 +1023,20 @@ public final class GitHubCopilotService:
     @GitHubCopilotSuggestionActor
     public func shutdown() async throws {
         GitHubCopilotService.services.removeAll { $0 === self }
-        let stream = AsyncThrowingStream<Void, Error> { continuation in
-            if let localProcessServer {
-                localProcessServer.shutdown() { err in
-                    continuation.finish(throwing: err)
-                }
-            } else {
-                continuation.finish(throwing: GitHubCopilotError.languageServerError(ServerError.serverUnavailable))
-            }
-        }
-        for try await _ in stream {
-            return
+        if let localProcessServer {
+            try await localProcessServer.shutdown()
+        } else {
+            throw GitHubCopilotError.languageServerError(ServerError.serverUnavailable)
         }
     }
 
     @GitHubCopilotSuggestionActor
     public func exit() async throws {
         GitHubCopilotService.services.removeAll { $0 === self }
-        let stream = AsyncThrowingStream<Void, Error> { continuation in
-            if let localProcessServer {
-                localProcessServer.exit() { err in
-                    continuation.finish(throwing: err)
-                }
-            } else {
-                continuation.finish(throwing: GitHubCopilotError.languageServerError(ServerError.serverUnavailable))
-            }
-        }
-        for try await _ in stream {
-            return
+        if let localProcessServer {
+            try await localProcessServer.exit()
+        } else {
+            throw GitHubCopilotError.languageServerError(ServerError.serverUnavailable)
         }
     }
 
@@ -1053,12 +1067,9 @@ public final class GitHubCopilotService:
 
     private func sendRequest<E: GitHubCopilotRequestType>(_ endpoint: E, timeout: TimeInterval? = nil) async throws -> E.Response {
         do {
-            if let timeout = timeout {
-                return try await server.sendRequest(endpoint, timeout: timeout)
-            } else {
-                return try await server.sendRequest(endpoint)
-            }
-        } catch let error as ServerError {
+            return try await server.sendRequest(endpoint)
+        } catch {
+            let error = ServerError.convertToServerError(error: error)
             if let info = CLSErrorInfo(for: error) {
                 // update the auth status if the error indicates it may have changed, and then rethrow
                 if info.affectsAuthStatus && !(endpoint is GitHubCopilotRequest.CheckStatus) {
@@ -1067,7 +1078,7 @@ public final class GitHubCopilotService:
             }
             let methodName: String
             switch endpoint.request {
-            case .custom(let method, _):
+            case .custom(let method, _, _):
                 methodName = method
             default:
                 methodName = endpoint.request.method.rawValue
@@ -1193,32 +1204,51 @@ public final class GitHubCopilotService:
             CopilotMCPToolManager.updateMCPTools(payload.servers)
         }
     }
+    
+    public func handleMCPRuntimeLogsNotification(_ notification: AnyJSONRPCNotification) async {
+        let debugDescription = encodeJSONParams(params: notification.params)
+        Logger.mcp.info("[\(self.projectRootURL.path)] copilot/mcpRuntimeLogs: \(debugDescription)")
+
+        if let payload = GitHubCopilotNotification.MCPRuntimeNotification.decode(
+            fromParams: notification.params
+        ) {
+            if mcpRuntimeLogFileName.isEmpty {
+                mcpRuntimeLogFileName = mcpLogFileNameFromURL(projectRootURL)
+            }
+            Logger
+                .logMCPRuntime(
+                    logFileName: mcpRuntimeLogFileName,
+                    level: payload.level.rawValue,
+                    message: payload.message,
+                    server: payload.server,
+                    tool: payload.tool,
+                    time: payload.time
+                )
+        }
+    }
+    
+    private func mcpLogFileNameFromURL(_ projectRootURL: URL) -> String {
+        // Create a unique key from workspace URL that's safe for filesystem
+        let workspaceName = projectRootURL.lastPathComponent
+            .replacingOccurrences(of: ".xcworkspace", with: "")
+            .replacingOccurrences(of: ".xcodeproj", with: "")
+            .replacingOccurrences(of: ".playground", with: "")
+        let workspacePath = projectRootURL.path
+        
+        // Use a combination of name and hash of path for uniqueness
+        let pathHash = String(workspacePath.hash.magnitude, radix: 36).prefix(6)
+        return "\(workspaceName)-\(pathHash)"
+    }
 }
 
-extension InitializingServer: GitHubCopilotLSP {
+extension SafeInitializingServer: GitHubCopilotLSP {
     func sendRequest<E: GitHubCopilotRequestType>(_ endpoint: E) async throws -> E.Response {
         try await sendRequest(endpoint.request)
-    }
-
-    func sendRequest<E: GitHubCopilotRequestType>(_ endpoint: E, timeout: TimeInterval) async throws -> E.Response {
-        return try await withCheckedThrowingContinuation { continuation in
-            self.sendRequest(endpoint.request, timeout: timeout) { result in
-                continuation.resume(with: result)
-            }
-        }
     }
 }
 
 extension GitHubCopilotService {
     func sendCopilotNotification(_ notif: CopilotClientNotification) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            localProcessServer?.sendCopilotNotification(notif) { error in
-                if let error = error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume()
-                }
-            }
-        }
+        try await localProcessServer?.sendCopilotNotification(notif)
     }
 }

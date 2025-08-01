@@ -170,9 +170,9 @@ struct ChatHistoryItemView: View {
                             // directly get title from chat tab info
                             Text(previewInfo.title ?? "New Chat")
                                 .frame(alignment: .leading)
-                                .font(.system(size: 14, weight: .regular))
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(.primary)
                                 .lineLimit(1)
-                                .hoverPrimaryForeground(isHovered: isHovered)
                             
                             if isTabSelected() {
                                 Text("Current")
@@ -185,7 +185,8 @@ struct ChatHistoryItemView: View {
                         HStack(spacing: 0) {
                             Text(formatDate(previewInfo.updatedAt))
                                 .frame(alignment: .leading)
-                                .font(.system(size: 13, weight: .thin))
+                                .font(.system(size: 13, weight: .regular))
+                                .foregroundColor(.secondary)
                                 .lineLimit(1)
                             
                             Spacer()
@@ -202,6 +203,7 @@ struct ChatHistoryItemView: View {
                             }
                         }) {
                             Image(systemName: "trash")
+                                .foregroundColor(.primary)
                                 .opacity(isHovered ? 1 : 0)
                         }
                         .buttonStyle(HoverButtonStyle())
@@ -215,7 +217,13 @@ struct ChatHistoryItemView: View {
             .onHover(perform: {
                 isHovered = $0
             })
-            .hoverRadiusBackground(isHovered: isHovered, cornerRadius: 4)
+            .hoverRadiusBackground(
+                isHovered: isHovered,
+                hoverColor: Color(nsColor: .textBackgroundColor.withAlphaComponent(0.55)),
+                cornerRadius: 4,
+                showBorder: isHovered,
+                borderColor: Color(nsColor: .separatorColor)
+            )
             .onTapGesture {
                 Task { @MainActor in
                     await store.send(.chatHistoryItemClicked(id: previewInfo.id)).finish()

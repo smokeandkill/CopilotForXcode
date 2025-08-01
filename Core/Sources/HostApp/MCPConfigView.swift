@@ -15,6 +15,7 @@ struct MCPConfigView: View {
     @State private var isMonitoring: Bool = false
     @State private var lastModificationDate: Date? = nil
     @State private var fileMonitorTask: Task<Void, Error>? = nil
+    @State private var isMCPFFEnabled = false
     @Environment(\.colorScheme) var colorScheme
 
     private static var lastSyncTimestamp: Date? = nil
@@ -23,19 +24,47 @@ struct MCPConfigView: View {
         WithPerceptionTracking {
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
-                    MCPIntroView()
-                    MCPToolsListView()
+                    MCPIntroView(isMCPFFEnabled: $isMCPFFEnabled)
+                    if isMCPFFEnabled {
+                        MCPToolsListView()
+                    }
                 }
                 .padding(20)
                 .onAppear {
                     setupConfigFilePath()
-                    startMonitoringConfigFile()
-                    refreshConfiguration(())
+                    Task {
+                        await updateMCPFeatureFlag()
+                    }
                 }
                 .onDisappear {
                     stopMonitoringConfigFile()
                 }
+                .onChange(of: isMCPFFEnabled) { newMCPFFEnabled in
+                    if newMCPFFEnabled {
+                        startMonitoringConfigFile()
+                        refreshConfiguration(())
+                    } else {
+                        stopMonitoringConfigFile()
+                    }
+                }
+                .onReceive(DistributedNotificationCenter.default()
+                    .publisher(for: .gitHubCopilotFeatureFlagsDidChange)) { _ in
+                    Task {
+                        await updateMCPFeatureFlag()
+                    }
+                }
             }
+        }
+    }
+    
+    private func updateMCPFeatureFlag() async {
+        do {
+            let service = try getService()
+            if let featureFlags = try await service.getCopilotFeatureFlags() {
+                isMCPFFEnabled = featureFlags.mcp
+            }
+        } catch {
+            Logger.client.error("Failed to get copilot feature flags: \(error)")
         }
     }
 

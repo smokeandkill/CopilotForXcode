@@ -247,6 +247,12 @@ public struct AnyCodable: Codable, Equatable {
 
 public typealias InvokeClientToolRequest = JSONRPCRequest<InvokeClientToolParams>
 
+public enum ToolInvocationStatus: String, Codable {
+    case success
+    case error
+    case cancelled
+}
+
 public struct LanguageModelToolResult: Codable, Equatable {
     public struct Content: Codable, Equatable {
         public let value: AnyCodable
@@ -256,9 +262,11 @@ public struct LanguageModelToolResult: Codable, Equatable {
         }
     }
     
+    public let status: ToolInvocationStatus
     public let content: [Content]
     
-    public init(content: [Content]) {
+    public init(status: ToolInvocationStatus = .success, content: [Content]) {
+        self.status = status
         self.content = content
     }
 }

@@ -41,7 +41,7 @@ public struct TabContainer: View {
         do {
             let service = try getService()
             let featureFlags = try await service.getCopilotFeatureFlags()
-            isAgentModeFFEnabled = featureFlags?.agent_mode ?? true
+            isAgentModeFFEnabled = featureFlags?.agentMode ?? true
             if hostAppStore.activeTabIndex == 2 && !isAgentModeFFEnabled {
                 hostAppStore.send(.setActiveTab(0))
             }
